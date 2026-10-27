@@ -1,0 +1,113 @@
+import time
+from urllib.parse import urljoin, urlparse
+import pandas as pd
+import requests
+from bs4 import BeautifulSoup
+
+# 設定
+START_URL = "https://www.musashino-u.ac.jp/"
+BASE_DOMAIN = urlparse(START_URL).netloc  # 'www.musashino-u.ac.jp'
+SLEEP_TIME = 1.0  # サーバー負荷軽減のための待ち時間（秒）
+
+# 結果を格納する辞書型変数 {URL: <title>の内容}
+sitemap_dict = {}
+
+# 訪問済みURLの集合（重複訪問を防ぐ）
+visited_urls = set()
+
+# 巡回待ちキュー
+urls_to_visit = [START_URL]
+
+
+def fetch_and_parse(url):
+    """指定されたURLにアクセスし、タイトルとページ内のリンクを取得する"""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
+    try:
+       
+        time.sleep(SLEEP_TIME)
+
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        response.encoding = response.apparent_encoding
+
+        if response.status_code != 200:
+            print(f"Failed to retrieve ({response.status_code}): {url}")
+            return None, []
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        
+        title_tag = soup.find("title")
+        title = title_tag.get_text(strip=True) if title_tag else "No Title"
+
+       
+        found_links = []
+        for a_tag in soup.find_all("a", href=True):
+            href = a_tag["href"]
+            
+            full_url = urljoin(url, href)
+
+            
+            parsed_full = urlparse(full_url)
+            clean_url = f"{parsed_full.scheme}://{parsed_full.netloc}{parsed_full.path}"
+
+            
+            if (
+                parsed_full.netloc == BASE_DOMAIN
+                and parsed_full.scheme in ["http", "https"]
+            ):
+                
+                if not clean_url.endswith(
+                    (".pdf", ".jpg", ".png", ".zip", ".mp4")
+                ):
+                    found_links.append(clean_url)
+
+        return title, found_links
+
+    except Exception as e:
+        print(f"Error accessing {url}: {e}")
+        return None, []
+
+
+
+def run_crawler(max_pages=50): 
+    while urls_to_visit and len(sitemap_dict) < max_pages:
+        current_url = urls_to_visit.pop(0)
+
+        
+        if current_url in visited_urls:
+            continue
+
+        print(
+            f"[{len(sitemap_dict) + 1}/{max_pages}] Crawling: {current_url}"
+        )
+        visited_urls.add(current_url)
+
+        
+        title, internal_links = fetch_and_parse(current_url)
+
+        if title:
+            
+            sitemap_dict[current_url] = title
+
+            
+            for link in internal_links:
+                if link not in visited_urls and link not in urls_to_visit:
+                    urls_to_visit.append(link)
+
+
+if __name__ == "__main__":
+    run_crawler(max_pages=50)
+    df = pd.DataFrame(
+        list(sitemap_dict.items()), columns=["URL", "Title"]
+    )
+
+    output_filename = "musashino_sitemap.csv"
+    df.to_csv(output_filename, index=False, encoding="utf-8-sig")
+
+    print(
+        f"\n処理が完了しました。{len(sitemap_dict)}件のデータを '{output_filename}' に保存しました。"
+    )
